@@ -1,0 +1,22 @@
+{
+  "num_nodes": 6,
+  "min_neighbors": 2,
+  "max_neighbors": 3,
+  "resources": {
+    "n1": ["video", "musica"],
+    "n2": ["foto"],
+    "n3": ["livro"],
+    "n4": ["backup"],
+    "n5": ["codigo"],
+    "n6": ["dataset"]
+  },
+  "edges": [
+    ["n1", "n2"],
+    ["n1", "n3"],
+    ["n2", "n4"],
+    ["n3", "n4"],
+    ["n3", "n5"],
+    ["n4", "n6"],
+    ["n5", "n6"]
+  ]
+}
