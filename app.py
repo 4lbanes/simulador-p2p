@@ -115,21 +115,12 @@ def render_search_form(network: PeerNetwork) -> None:
         with st.form("search-form"):
             start_node = st.selectbox("Nó inicial", network.nodes)
             resource_id = st.selectbox("Recurso", network.all_resources())
-            form_cols = st.columns(2)
-            ttl = form_cols[0].number_input(
+            ttl = st.number_input(
                 "TTL",
                 min_value=0,
                 max_value=network.num_nodes * 2,
                 value=min(4, network.num_nodes),
                 step=1,
-            )
-            seed = form_cols[1].number_input(
-                "Semente",
-                min_value=0,
-                max_value=999_999,
-                value=7,
-                step=1,
-                help="Usada apenas nos algoritmos de passeio aleatório.",
             )
             algorithm = st.selectbox(
                 "Algoritmo",
@@ -140,8 +131,7 @@ def render_search_form(network: PeerNetwork) -> None:
 
     if submitted:
         try:
-            active_seed = int(seed) if "random_walk" in algorithm else None
-            st.session_state.result = network.search(start_node, resource_id, int(ttl), algorithm, active_seed)
+            st.session_state.result = network.search(start_node, resource_id, int(ttl), algorithm)
             st.rerun()
         except ConfigError as exc:
             st.error(str(exc))
@@ -174,16 +164,33 @@ def render_resources(network: PeerNetwork) -> None:
 def render_graph(network: PeerNetwork, result: SearchResult | None) -> None:
     with st.container(border=True):
         st.subheader("Rede e rastro")
-        st.caption("Azul: nó comum. Laranja: visitado. Verde: fornecedor encontrado.")
+        st.caption(
+            "Azul: nó comum. Laranja: visitado. Verde: fornecedor encontrado. "
+            "Seta laranja: caminho até o recurso. Linha roxa: outras conexões usadas na busca."
+        )
 
         highlighted_nodes = set(result.visited_nodes) if result else set()
+        path_sequence = result.path if result else []
         path_edges = set()
-        if result:
-            for left, right in zip(result.path, result.path[1:]):
-                if left in network.adjacency and right in network.adjacency[left]:
-                    path_edges.add(tuple(sorted((left, right))))
+        for left, right in zip(path_sequence, path_sequence[1:]):
+            if left in network.adjacency and right in network.adjacency[left]:
+                path_edges.add(tuple(sorted((left, right))))
 
-        fig = build_graph_figure(network, highlighted_nodes, path_edges, result.provider if result else None)
+        traversed_edges = set()
+        if result:
+            for step in result.steps:
+                if step.kind == "message" and step.from_node:
+                    traversed_edges.add(tuple(sorted((step.from_node, step.to_node))))
+        other_visited_edges = traversed_edges - path_edges
+
+        fig = build_graph_figure(
+            network,
+            highlighted_nodes,
+            path_edges,
+            other_visited_edges,
+            path_sequence,
+            result.provider if result else None,
+        )
         st.plotly_chart(fig, use_container_width=True)
 
         if result:
@@ -202,6 +209,8 @@ def build_graph_figure(
     network: PeerNetwork,
     highlighted_nodes: set[str],
     path_edges: set[tuple[str, str]],
+    other_visited_edges: set[tuple[str, str]],
+    path_sequence: list[str],
     provider: str | None,
 ) -> go.Figure:
     graph = nx.Graph()
@@ -213,11 +222,19 @@ def build_graph_figure(
     edge_y: list[float | None] = []
     path_x: list[float | None] = []
     path_y: list[float | None] = []
+    visited_edge_x: list[float | None] = []
+    visited_edge_y: list[float | None] = []
 
     for left, right in network.edges:
         x0, y0 = positions[left]
         x1, y1 = positions[right]
-        target_x, target_y = (path_x, path_y) if tuple(sorted((left, right))) in path_edges else (edge_x, edge_y)
+        key = tuple(sorted((left, right)))
+        if key in path_edges:
+            target_x, target_y = path_x, path_y
+        elif key in other_visited_edges:
+            target_x, target_y = visited_edge_x, visited_edge_y
+        else:
+            target_x, target_y = edge_x, edge_y
         target_x.extend([x0, x1, None])
         target_y.extend([y0, y1, None])
 
@@ -258,6 +275,16 @@ def build_graph_figure(
     )
     fig.add_trace(
         go.Scatter(
+            x=visited_edge_x,
+            y=visited_edge_y,
+            mode="lines",
+            line=dict(width=3.4, color="#9333ea"),
+            hoverinfo="none",
+            showlegend=False,
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
             x=path_x,
             y=path_y,
             mode="lines",
@@ -280,6 +307,35 @@ def build_graph_figure(
             name="Nós",
         )
     )
+    arrows = []
+    for source, target in zip(path_sequence, path_sequence[1:]):
+        if source not in positions or target not in positions:
+            continue
+        if target not in network.adjacency.get(source, set()):
+            continue
+        ax_pos, ay_pos = positions[source]
+        x_pos, y_pos = positions[target]
+        arrows.append(
+            dict(
+                x=x_pos,
+                y=y_pos,
+                ax=ax_pos,
+                ay=ay_pos,
+                xref="x",
+                yref="y",
+                axref="x",
+                ayref="y",
+                showarrow=True,
+                arrowhead=3,
+                arrowsize=1.4,
+                arrowwidth=3.2,
+                arrowcolor="#c2410c",
+                standoff=16,
+                startstandoff=16,
+                text="",
+            )
+        )
+
     fig.update_layout(
         height=560,
         margin=dict(l=10, r=10, t=10, b=10),
@@ -288,6 +344,7 @@ def build_graph_figure(
         xaxis=dict(visible=False),
         yaxis=dict(visible=False),
         showlegend=False,
+        annotations=arrows,
     )
     return fig
 

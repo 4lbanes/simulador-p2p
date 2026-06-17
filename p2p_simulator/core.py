@@ -275,6 +275,11 @@ class PeerNetwork:
         return self._random_walk_impl(start, resource, ttl, seed, informed=True)
 
     def _flooding_impl(self, start: str, resource: str, ttl: int, informed: bool) -> SearchResult:
+        algorithm = "informed_flooding" if informed else "flooding"
+        # O TTL é local a cada ramo: cada nó encaminha (seu TTL - 1) para os
+        # vizinhos ainda não visitados. Cada nó é visitado uma única vez, então
+        # sub-árvores irmãs não alcançam o mesmo nó. Achar o recurso não
+        # interrompe a inundação: os demais ramos seguem até o TTL chegar a 0.
         queue: deque[tuple[str, int, list[str]]] = deque([(start, ttl, [start])])
         visited: list[str] = [start]
         processed = {start}
@@ -284,23 +289,33 @@ class PeerNetwork:
         messages = 0
         step_index = 1
 
+        found = False
+        provider: str | None = None
+        cache_hit_at: str | None = None
+        path_to_provider: list[str] = []
+
         while queue:
             node, remaining_ttl, path = queue.popleft()
-            provider, cache_hit_at = self._known_provider(node, resource, informed)
-            if provider:
-                return self._result(
-                    "informed_flooding" if informed else "flooding",
-                    start,
-                    resource,
-                    ttl,
-                    True,
-                    provider,
-                    messages,
-                    visited,
-                    path if cache_hit_at is None else path + [provider],
-                    steps,
-                    cache_hit_at,
-                )
+
+            if not found:
+                hit_provider, hit_cache_at = self._known_provider(node, resource, informed)
+                if hit_provider:
+                    found = True
+                    provider = hit_provider
+                    cache_hit_at = hit_cache_at
+                    path_to_provider = path if hit_cache_at is None else path + [hit_provider]
+                    origin = f"cache de {node}" if hit_cache_at else node
+                    steps.append(
+                        SearchStep(
+                            step_index,
+                            None,
+                            node,
+                            remaining_ttl,
+                            "found",
+                            f"Recurso {resource} localizado via {origin} (fornecedor {hit_provider}).",
+                        )
+                    )
+                    step_index += 1
 
             if remaining_ttl == 0:
                 steps.append(
@@ -330,17 +345,17 @@ class PeerNetwork:
                 queue.append((neighbor, next_ttl, path + [neighbor]))
 
         return self._result(
-            "informed_flooding" if informed else "flooding",
+            algorithm,
             start,
             resource,
             ttl,
-            False,
-            None,
+            found,
+            provider,
             messages,
             visited,
-            [],
+            path_to_provider,
             steps,
-            None,
+            cache_hit_at,
         )
 
     def _random_walk_impl(
